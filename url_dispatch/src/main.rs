@@ -1,8 +1,12 @@
-use actix_web::{web, App, HttpResponse, HttpServer, guard, get};
+use actix_web::{web, App, HttpResponse, HttpServer, HttpRequest, Result, get};
 
 
-async fn index() -> HttpResponse {
-    HttpResponse::Ok().body("Hello")
+#[get("/a/{v1}/{v2}/")]
+async fn index(req: HttpRequest) -> Result<String> {
+    let v1: &str = req.match_info().get("v1").unwrap();
+    let v2: u8 = req.match_info().query("v2").parse().unwrap();
+    let (v3, v4): (&str, u8) = req.match_info().load().unwrap();
+    Ok(format!("Values {} {} {} {}", v1, v2, v3, v4))
 }
 
 #[get("/show")]
@@ -16,17 +20,21 @@ async fn user_detail(path: web::Path<(u32,)>) -> HttpResponse {
 }
 
 
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     HttpServer::new(|| {
         App::new().service(
-            web::scope("/users")
-                .route("/", web::get().to(index))
-                .service(show_users)
-                .service(user_detail),
+            web::scope("")
+                .service(index)
+                .service(
+                    web::scope("users")
+                    .service(show_users)
+                    .service(user_detail),
+                )
         )
     })
-    .bind(("127.0.0.1", 8080))?
+    .bind(("127.0.0.1", 8081))?
     .run()
     .await
 }
