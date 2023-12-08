@@ -4,6 +4,9 @@ use actix_web::{
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
     Error,
 };
+
+use actix_web::{dev::Service as _, web, App};
+use futures_util::future::FutureExt;
 use futures_util::future::LocalBoxFuture;
 
 // There are two steps in middleware processing.
@@ -60,4 +63,21 @@ where
             Ok(res)
         })
     }
+}
+
+
+#[actix_web::main]
+async fn main() {
+    let app = App::new()
+        .wrap_fn(|req, srv| {
+            println!("Hi from start. You requested: {}", req.path());
+            srv.call(req).map(|res| {
+                println!("Hi from response");
+                res
+            })
+        })
+        .route(
+            "/index.html",
+            web::get().to(|| async { "Hello, middleware!" }),
+        );
 }
