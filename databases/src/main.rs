@@ -42,6 +42,57 @@ async fn get_user(client: web::Data<Client>, username: web::Path<String>) -> Htt
     }
 }
 
+/// Gets the user with the supplied username.
+#[get("/delete_user/{username}")]
+async fn delete_user(client: web::Data<Client>, username: web::Path<String>) -> HttpResponse {
+    let username = username.into_inner();
+    let collection: Collection<User> = client.database(DB_NAME).collection(COLL_NAME);
+    match collection
+        .delete_one(doc! { "username": &username }, None)
+        .await
+    {    
+        Ok(result) => {
+            if result.deleted_count > 0 {
+                HttpResponse::Ok().body("User deleted successfully")
+            } else {
+                HttpResponse::NotFound().body(format!("No user found with username {}", username))
+            }
+        }
+        Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
+    }
+}
+
+//edits User Profile
+#[post("/edit_user/{username}")]
+async fn edit_user(client: web::Data<Client>, username: web::Path<String>, user: web::Form<User>) -> HttpResponse {
+    let username = username.into_inner();
+    let collection: Collection<User> = client.database(DB_NAME).collection(COLL_NAME);
+    // Create a filter based on the username
+    let filter = doc! { "username": &username };
+
+    // Create an update document with the new user data
+    let update_doc = doc! {
+        "$set": {
+            "first_name": &user.first_name,
+            "last_name": &user.last_name,
+            "username": &user.username,
+            "email": &user.email,
+        }
+    };
+
+    // Use the update_one method to update the user
+    match collection.update_one(filter, update_doc, None).await {
+        Ok(result) => {
+            if result.modified_count > 0 {
+                HttpResponse::Ok().body("User updated successfully")
+            } else {
+                HttpResponse::NotFound().body(format!("No user found with username {}", username))
+            }
+        }
+        Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
+    }
+}
+
 /// Creates an index on the "username" field to force the values to be unique.
 async fn create_username_index(client: &Client) {
     let options = IndexOptions::builder().unique(true).build();
@@ -57,8 +108,11 @@ async fn create_username_index(client: &Client) {
         .expect("creating an index should succeed");
 }
 
+
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+
     dotenv().ok();
     let uri = std::env::var("MONGODB_URI").expect("MONGODB_URI must be set in the .env file");
 
@@ -70,6 +124,8 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(client.clone()))
             .service(add_user)
             .service(get_user)
+            .service(delete_user)
+            .service(edit_user)
     })
     .bind(("127.0.0.1", 8081))?
     .run()
