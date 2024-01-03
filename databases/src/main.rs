@@ -2,6 +2,7 @@ use actix_web::{get, post, web, App, HttpResponse, HttpServer};
 use mongodb::{bson::doc, options::IndexOptions, Client, Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 use dotenv::dotenv;
+use regex::Regex;
 
 const DB_NAME: &str = "myApp";
 const COLL_NAME: &str = "users";
@@ -14,11 +15,23 @@ pub struct User {
     pub email: String,
 }
 
+// Function to validate email format using a regular expression
+fn is_valid_email(email: &str) -> bool {
+    lazy_static::lazy_static! {
+        static ref EMAIL_REGEX: Regex = Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$").unwrap();
+    }
+    EMAIL_REGEX.is_match(email)
+}
+
 /// Adds a new user to the "users" collection in the database.
 #[post("/add_user")]
 async fn add_user(client: web::Data<Client>, form: web::Form<User>) -> HttpResponse {
+    if !is_valid_email(&form.email) {
+        return HttpResponse::BadRequest().body("Invalid email format");
+    }
     let collection = client.database(DB_NAME).collection(COLL_NAME);
     let result = collection.insert_one(form.into_inner(), None).await;
+    // Validate the email format before proceeding
     match result {
         Ok(_) => HttpResponse::Ok().body("user added"),
         Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
@@ -79,6 +92,10 @@ async fn edit_user(client: web::Data<Client>, username: web::Path<String>, user:
             "email": &user.email,
         }
     };
+
+    if !is_valid_email(&user.email) {
+        return HttpResponse::BadRequest().body("Invalid email format");
+    }
 
     // Use the update_one method to update the user
     match collection.update_one(filter, update_doc, None).await {
