@@ -532,8 +532,10 @@ version = "0.1.0"
 dependencies = [
  "actix-web",
  "dotenv",
+ "lazy_static",
  "mongodb",
  "mongoose",
+ "regex",
  "serde",
 ]
 

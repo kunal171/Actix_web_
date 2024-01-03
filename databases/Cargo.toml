@@ -11,3 +11,5 @@ serde = { version = "1.0", features = ["derive"] }
 mongoose = "0.1.16"
 mongodb = "2"
 dotenv = "0.15"
+regex = "1"
+lazy_static = "1"
