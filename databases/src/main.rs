@@ -1,4 +1,5 @@
 use actix_web::{get, post, web, App, HttpResponse, HttpServer};
+use bcrypt::{hash, verify, DEFAULT_COST};
 use mongodb::{bson::doc, options::IndexOptions, Client, Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 use dotenv::dotenv;
@@ -13,7 +14,20 @@ pub struct User {
     pub last_name: String,
     pub username: String,
     pub email: String,
+    password: String,
+    confirm_password: String,
 }
+
+//function for hashing password
+fn hash_password(password: &str) -> String {
+    hash(password, DEFAULT_COST).expect("Failed to hash password")
+}
+
+//function for verifying password while authenticating
+fn verify_password(password: &str, hash: &str) -> bool {
+    verify(password, hash).expect("Failed to verify password")
+}
+
 
 // Function to validate email format using a regular expression
 fn is_valid_email(email: &str) -> bool {
@@ -26,11 +40,29 @@ fn is_valid_email(email: &str) -> bool {
 /// Adds a new user to the "users" collection in the database.
 #[post("/add_user")]
 async fn add_user(client: web::Data<Client>, form: web::Form<User>) -> HttpResponse {
+    // Validate the email address
     if !is_valid_email(&form.email) {
         return HttpResponse::BadRequest().body("Invalid email format");
     }
+    // Check if passwords match
+    if form.password != form.confirm_password {
+        return HttpResponse::BadRequest().body("Passwords do not match");
+    }
+    // Hash the new password before updating the user
+    let hashed_password = hash_password(&form.password);
+
+    // Create a new User with the hashed password
+    let user = User {
+        first_name: form.first_name.clone(),
+        last_name: form.last_name.clone(),
+        username: form.username.clone(),
+        email: form.email.clone(),
+        password: hashed_password,
+        confirm_password: String::new(), // Set to an empty string or handle it as needed
+    };
+
     let collection = client.database(DB_NAME).collection(COLL_NAME);
-    let result = collection.insert_one(form.into_inner(), None).await;
+    let result = collection.insert_one(user, None).await;
     // Validate the email format before proceeding
     match result {
         Ok(_) => HttpResponse::Ok().body("user added"),
@@ -83,6 +115,17 @@ async fn edit_user(client: web::Data<Client>, username: web::Path<String>, user:
     // Create a filter based on the username
     let filter = doc! { "username": &username };
 
+    if !is_valid_email(&user.email) {
+        return HttpResponse::BadRequest().body("Invalid email format");
+    }
+
+    // Check if passwords match
+    if user.password != user.confirm_password {
+        return HttpResponse::BadRequest().body("Passwords do not match");
+    }
+
+    // Hash the new password before updating the user
+    let hashed_password = hash_password(&user.password);
     // Create an update document with the new user data
     let update_doc = doc! {
         "$set": {
@@ -90,12 +133,10 @@ async fn edit_user(client: web::Data<Client>, username: web::Path<String>, user:
             "last_name": &user.last_name,
             "username": &user.username,
             "email": &user.email,
+            "password" : &hashed_password
         }
     };
 
-    if !is_valid_email(&user.email) {
-        return HttpResponse::BadRequest().body("Invalid email format");
-    }
 
     // Use the update_one method to update the user
     match collection.update_one(filter, update_doc, None).await {
