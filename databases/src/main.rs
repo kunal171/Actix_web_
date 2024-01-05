@@ -14,8 +14,8 @@ pub struct User {
     pub last_name: String,
     pub username: String,
     pub email: String,
-    password: String,
-    confirm_password: String,
+    pub password: String,
+    pub confirm_password: String,
 }
 
 //function for hashing password
@@ -107,6 +107,28 @@ async fn delete_user(client: web::Data<Client>, username: web::Path<String>) -> 
     }
 }
 
+
+//Get User Sign In
+#[get("/sign_in_user/{username}/{password}")]
+async fn sign_in_user(client: web::Data<Client>, path: web::Path<(String, String)>) -> HttpResponse {
+    let (username, password)  = path.into_inner();
+    let collection: Collection<User> = client.database(DB_NAME).collection(COLL_NAME);
+    match collection
+    .find_one(doc! {"username" : &username}, None)
+    .await {
+        Ok(Some(user)) => {
+            if verify_password(&password, &user.password) {
+                HttpResponse::Ok().body(format!("SignIn Succesfull Welcome User {username}"))
+            }else {
+                HttpResponse::NotFound().body(format!("Incorrect Password"))
+            }
+        }
+        Ok(None) => {
+            HttpResponse::NotFound().body(format!("No user found with username {username}"))
+        }
+        Err(_) => todo!(),
+    }
+}
 //edits User Profile
 #[post("/edit_user/{username}")]
 async fn edit_user(client: web::Data<Client>, username: web::Path<String>, user: web::Form<User>) -> HttpResponse {
@@ -136,7 +158,6 @@ async fn edit_user(client: web::Data<Client>, username: web::Path<String>, user:
             "password" : &hashed_password
         }
     };
-
 
     // Use the update_one method to update the user
     match collection.update_one(filter, update_doc, None).await {
@@ -184,6 +205,7 @@ async fn main() -> std::io::Result<()> {
             .service(get_user)
             .service(delete_user)
             .service(edit_user)
+            .service(sign_in_user)
     })
     .bind(("127.0.0.1", 8081))?
     .run()
