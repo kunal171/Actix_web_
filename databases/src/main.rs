@@ -1,13 +1,16 @@
-use actix_web::{get, post, web, App, HttpResponse, HttpServer};
+use actix_web::{get, post, web,dev,App, HttpResponse, HttpServer, HttpRequest, Result ,Error};
+use actix_web::cookie::Cookie;
 use bcrypt::{hash, verify, DEFAULT_COST};
 use mongodb::{bson::doc, options::IndexOptions, Client, Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 use dotenv::dotenv;
 use regex::Regex;
+use serde_json::json;
 
 const DB_NAME: &str = "myApp";
 const COLL_NAME: &str = "users";
 
+// Defining User Struct
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct User {
     pub first_name: String,
@@ -118,7 +121,9 @@ async fn sign_in_user(client: web::Data<Client>, path: web::Path<(String, String
     .await {
         Ok(Some(user)) => {
             if verify_password(&password, &user.password) {
+                let serialized_user = serde_json::to_string(&user)?;
                 HttpResponse::Ok().body(format!("SignIn Succesfull Welcome User {username}"))
+                .cookie(Cookie::build("user", serialized_user).http_only(true).finish())
             }else {
                 HttpResponse::NotFound().body(format!("Incorrect Password"))
             }
@@ -129,6 +134,7 @@ async fn sign_in_user(client: web::Data<Client>, path: web::Path<(String, String
         Err(_) => todo!(),
     }
 }
+
 //edits User Profile
 #[post("/edit_user/{username}")]
 async fn edit_user(client: web::Data<Client>, username: web::Path<String>, user: web::Form<User>) -> HttpResponse {
@@ -187,11 +193,38 @@ async fn create_username_index(client: &Client) {
         .expect("creating an index should succeed");
 }
 
+#[get("/sgin_out")]
+async fn sign_out() -> HttpResponse {
+    // Clear the user cookie to sign out
+    HttpResponse::Ok()
+        .json(json!({"message": "Sign-out successful"}))
+        .del_cookie("user")
+}
 
+
+async fn is_user_signed_in(
+    req: HttpRequest,
+    srv: &dyn dev::Service<Request = HttpRequest, Response = actix_web::dev::ServiceResponse, Error = Error, Future = Type>,
+) -> Result<actix_web::dev::ServiceResponse, actix_web::Error> {
+    // Check if the "user" cookie is present
+    if let Some(cookie) = req.cookie("user") {
+        // Deserialize the user from the cookie
+        match serde_json::from_str::<User>(cookie.value()) {
+            Ok(user) => {
+                // Continue with the request, passing the user to the handler
+                let fut = srv.call(req.with_extension(user));
+                Ok(fut.await?)
+            }
+            Err(_) => Ok(req.error_response(HttpResponse::Unauthorized())),
+        }
+    } else {
+        // No "user" cookie, the user is not signed in
+        Ok(req.error_response(HttpResponse::Unauthorized()))
+    }
+}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-
     dotenv().ok();
     let uri = std::env::var("MONGODB_URI").expect("MONGODB_URI must be set in the .env file");
 
@@ -203,11 +236,13 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(client.clone()))
             .service(add_user)
             .service(get_user)
-            .service(delete_user)
-            .service(edit_user)
             .service(sign_in_user)
+            .wrap_fn(is_user_signed_in) // Apply the middleware to protect routes
+            .service(web::resource("/protected").route(web::get().to(delete_user)))
+            .service(web::resource("/protected").route(web::get().to(edit_user)))
+            .service(web::resource("/protected").route(web::get().to(sign_out)))
     })
-    .bind(("127.0.0.1", 8081))?
+    .bind(("127.0.0.1", 8080))?
     .run()
     .await
 }
