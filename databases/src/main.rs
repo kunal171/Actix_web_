@@ -1,11 +1,13 @@
-use actix_web::{get, post, web,dev,App, HttpResponse, HttpServer, HttpRequest, Result ,Error};
-use actix_web::cookie::Cookie;
+use std::future::{Ready, ready};
+use actix_web::{get, post,cookie, web, App, HttpResponse, HttpServer, HttpRequest, Result ,Error};
+use actix_web::dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform};
 use bcrypt::{hash, verify, DEFAULT_COST};
 use mongodb::{bson::doc, options::IndexOptions, Client, Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 use dotenv::dotenv;
 use regex::Regex;
 use serde_json::json;
+use futures_util::future::{LocalBoxFuture, ok};
 
 const DB_NAME: &str = "myApp";
 const COLL_NAME: &str = "users";
@@ -19,6 +21,119 @@ pub struct User {
     pub email: String,
     pub password: String,
     pub confirm_password: String,
+}
+
+// pub struct IsUserSignedInMiddleware;
+
+// impl<S, B> Transform<S, ServiceRequest> for IsUserSignedInMiddleware
+// where
+//     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+//     S::Future: 'static,
+//     B: 'static,
+// {
+//     type Response = ServiceResponse<B>;
+//     type Error = Error;
+//     type InitError = ();
+//     type Transform = IsUserSignedInMiddlewareService<S>;
+//     type Future = Ready<Result<Self::Transform, Self::InitError>>;
+
+//     fn new_transform(&self, service: S) -> Self::Future {
+//         ready(Ok(IsUserSignedInMiddlewareService { service }))
+//     }
+// }
+
+// pub struct IsUserSignedInMiddlewareService<S> {
+//     service: S,
+// }
+
+// impl<S, B> Service<ServiceRequest> for IsUserSignedInMiddlewareService<S>
+// where
+//     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+//     S::Future: 'static,
+//     B: 'static,
+// {
+//     type Response = ServiceResponse<B>;
+//     type Error = Error;
+//     type Future = Ready<Result<Self::Response, Self::Error>>;
+
+//     forward_ready!(service);
+    
+//     fn call(&self, req: ServiceRequest) -> Self::Future {
+//         // Check if the "user" cookie is present
+//         if let Some(cookie) = req.cookie("user") {
+//             // Continue with the request, passing the user to the handler
+//             let fut = self.service.call(req);
+//             Box::pin(async move {
+//                 let res = fut.await?;
+//                 Ok(res)
+//             })
+//         } else {
+//             // No "user" cookie, the user is not signed in
+//             Box::pin(ok(req.error_response(HttpResponse::Unauthorized())))
+//         }
+//     }
+// }
+
+
+// There are two steps in middleware processing.
+// 1. Middleware initialization, middleware factory gets called with
+//    next service in chain as parameter.
+// 2. Middleware's call method gets called with normal request.
+pub struct IsUserSignedInMiddleware;
+
+// Middleware factory is `Transform` trait
+// `S` - type of the next service
+// `B` - type of response's body
+impl<S, B> Transform<S, ServiceRequest> for IsUserSignedInMiddleware
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    S::Future: 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<B>;
+    type Error = Error;
+    type InitError = ();
+    type Transform = IsUserSignedInMiddlewareService<S>;
+    type Future = Ready<Result<Self::Transform, Self::InitError>>;
+
+    fn new_transform(&self, service: S) -> Self::Future {
+        ready(Ok(IsUserSignedInMiddlewareService { service }))
+    }
+}
+
+pub struct IsUserSignedInMiddlewareService<S> {
+    service: S,
+}
+
+impl<S, B> Service<ServiceRequest> for IsUserSignedInMiddlewareService<S>
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    S::Future: 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<B>;
+    type Error = Error;
+    type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
+
+    forward_ready!(service);
+
+    fn call(&self, req: ServiceRequest) -> Self::Future {
+        println!("Hi from start. You requested: {}", req.path());
+
+        
+        if let Some(cookie) = req.cookie("user") {
+            let fut = self.service.call(req);
+            Box::pin(async move {
+                let res = fut.await?;
+    
+                println!("Hi from response");
+                Ok(res)
+            })
+        }else {
+            
+        }
+        
+    }
 }
 
 //function for hashing password
@@ -121,9 +236,8 @@ async fn sign_in_user(client: web::Data<Client>, path: web::Path<(String, String
     .await {
         Ok(Some(user)) => {
             if verify_password(&password, &user.password) {
-                let serialized_user = serde_json::to_string(&user)?;
-                HttpResponse::Ok().body(format!("SignIn Succesfull Welcome User {username}"))
-                .cookie(Cookie::build("user", serialized_user).http_only(true).finish())
+                HttpResponse::Ok().cookie(cookie::Cookie::build("isloggedIn", "true").http_only(true).finish())
+                .body(format!("SignIn Succesfull Welcome User {username}"))
             }else {
                 HttpResponse::NotFound().body(format!("Incorrect Password"))
             }
@@ -197,31 +311,35 @@ async fn create_username_index(client: &Client) {
 async fn sign_out() -> HttpResponse {
     // Clear the user cookie to sign out
     HttpResponse::Ok()
+        .del_cookie("isloggedIn")
         .json(json!({"message": "Sign-out successful"}))
-        .del_cookie("user")
+
 }
 
 
-async fn is_user_signed_in(
-    req: HttpRequest,
-    srv: &dyn dev::Service<Request = HttpRequest, Response = actix_web::dev::ServiceResponse, Error = Error, Future = Type>,
-) -> Result<actix_web::dev::ServiceResponse, actix_web::Error> {
-    // Check if the "user" cookie is present
-    if let Some(cookie) = req.cookie("user") {
-        // Deserialize the user from the cookie
-        match serde_json::from_str::<User>(cookie.value()) {
-            Ok(user) => {
-                // Continue with the request, passing the user to the handler
-                let fut = srv.call(req.with_extension(user));
-                Ok(fut.await?)
-            }
-            Err(_) => Ok(req.error_response(HttpResponse::Unauthorized())),
-        }
-    } else {
-        // No "user" cookie, the user is not signed in
-        Ok(req.error_response(HttpResponse::Unauthorized()))
-    }
-}
+// async fn is_user_signed_in(
+//     req: HttpRequest,
+//     srv: &dyn Service<Response = actix_web::dev::ServiceResponse, Error = Error, Future = impl std::future::Future<Output = Result<actix_web::dev::ServiceResponse, actix_web::Error>>>,
+// ) -> Result<actix_web::dev::ServiceResponse, actix_web::Error> {
+//     // Check if the "user" cookie is present
+//     if let Some(cookie) = req.cookie("user") {
+//         // Deserialize the user from the cookie
+//         match serde_json::from_str::<User>(cookie.value()) {
+//             Ok(user) => {
+//                 // Continue with the request, passing the user to the handler
+//                 let fut = srv.call(req.with_extension(user));
+//                 Ok(fut.await?)
+//             }
+//             Err(_) => Ok(req.error_response(HttpResponse::Unauthorized())),
+//         }
+//     } else {
+//         // No "user" cookie, the user is not signed in
+//         Ok(req.error_response(HttpResponse::Unauthorized()))
+//     }
+// }
+
+
+
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -237,10 +355,10 @@ async fn main() -> std::io::Result<()> {
             .service(add_user)
             .service(get_user)
             .service(sign_in_user)
-            .wrap_fn(is_user_signed_in) // Apply the middleware to protect routes
-            .service(web::resource("/protected").route(web::get().to(delete_user)))
-            .service(web::resource("/protected").route(web::get().to(edit_user)))
-            .service(web::resource("/protected").route(web::get().to(sign_out)))
+            // .wrap_fn(is_user_signed_in) // Apply the middleware to protect routes
+            // .service(web::resource("/protected").route(web::get().to(delete_user)))
+            // .service(web::resource("/protected").route(web::get().to(edit_user)))
+            // .service(web::resource("/protected").route(web::get().to(sign_out)))
     })
     .bind(("127.0.0.1", 8080))?
     .run()
